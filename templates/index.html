@@ -198,9 +198,17 @@
 
   <button class="btn green" id="gbbBtn" disabled>Download GBB Data (by Department)</button>
 
-  <label for="gbbLabels">Tier names, lowest price first (comma-separated)</label>
+  <label for="gbbLabels">Quality tier names, lowest price first (comma-separated)</label>
   <input type="text" id="gbbLabels" value="Good, Better, Best">
-  <p class="subtitle" style="margin-top: 0.5rem; margin-bottom: 0;">Per department, prices are auto-derived by splitting that department's price data into equal-count tiers (median of each tier) — one tier per name you list here, in ascending price order.</p>
+  <p class="subtitle" style="margin-top: 0.5rem; margin-bottom: 0;">Per department, prices are auto-derived by splitting that department's price data into equal-count tiers (median of each tier) — one tier per name you list here, in ascending price order. Also used as the Quality axis below.</p>
+
+  <div class="divider"></div>
+
+  <button class="btn green" id="qcBtn" disabled>Download Quality &amp; Condition Data (by Department)</button>
+
+  <label for="conditionLabels">Condition tier names, lowest price first (comma-separated)</label>
+  <input type="text" id="conditionLabels" value="Distressed, Average, Like New">
+  <p class="subtitle" style="margin-top: 0.5rem; margin-bottom: 0;">Per department, prices are first split into Quality tiers (using the names above), then each Quality tier is further split into these Condition tiers — same equal-count/median approach, nested.</p>
 
   <div class="status" id="status"></div>
 </div>
@@ -218,6 +226,8 @@
   const deptList         = document.getElementById("deptList");
   const gbbBtn           = document.getElementById("gbbBtn");
   const gbbLabels        = document.getElementById("gbbLabels");
+  const qcBtn            = document.getElementById("qcBtn");
+  const conditionLabels  = document.getElementById("conditionLabels");
   const statusBox       = document.getElementById("status");
 
   let allCompanies = JSON.parse('{{ companies | tojson | safe }}');
@@ -233,6 +243,7 @@
       catBtn.disabled = true;
       priceBtn.disabled = true;
       gbbBtn.disabled = true;
+      qcBtn.disabled = true;
       return;
     }
     for (const c of allCompanies) {
@@ -245,7 +256,9 @@
     catBtn.disabled = false;
     priceBtn.disabled = false;
     gbbBtn.disabled = false;
+    qcBtn.disabled = false;
     loadGbbLabels();
+    loadConditionLabels();
   }
   renderCompanies();
 
@@ -334,41 +347,49 @@
   catBtn.addEventListener("click", () => runSync("category", catBtn));
   priceBtn.addEventListener("click", () => runSync("pricing", priceBtn));
   gbbBtn.addEventListener("click", () => runSync("gbb", gbbBtn));
+  qcBtn.addEventListener("click", () => runSync("quality-condition", qcBtn));
 
-  async function loadGbbLabels() {
-    const companyId = companySelect.value;
-    if (!companyId) return;
-    try {
-      const res = await fetch(`/companies/${companyId}/gbb-labels`);
-      const data = await res.json();
-      if (res.ok) gbbLabels.value = data.labels.join(", ");
-    } catch (e) {
-      // leave whatever value is currently in the field
+  function makeLabelField(inputEl, endpoint) {
+    async function load() {
+      const companyId = companySelect.value;
+      if (!companyId) return;
+      try {
+        const res = await fetch(`/companies/${companyId}/${endpoint}`);
+        const data = await res.json();
+        if (res.ok) inputEl.value = data.labels.join(", ");
+      } catch (e) {
+        // leave whatever value is currently in the field
+      }
     }
+
+    inputEl.addEventListener("change", async () => {
+      const companyId = companySelect.value;
+      if (!companyId) return;
+      const labels = inputEl.value.split(",").map(s => s.trim()).filter(Boolean);
+      if (labels.length === 0) {
+        showStatus("error", "Enter at least one tier name.");
+        return;
+      }
+      try {
+        const res = await fetch(`/companies/${companyId}/${endpoint}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ labels }),
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          showStatus("error", err.error || "Could not save tier names.");
+        }
+      } catch (e) {
+        showStatus("error", "Could not save tier names.");
+      }
+    });
+
+    return load;
   }
 
-  gbbLabels.addEventListener("change", async () => {
-    const companyId = companySelect.value;
-    if (!companyId) return;
-    const labels = gbbLabels.value.split(",").map(s => s.trim()).filter(Boolean);
-    if (labels.length === 0) {
-      showStatus("error", "Enter at least one tier name.");
-      return;
-    }
-    try {
-      const res = await fetch(`/companies/${companyId}/gbb-labels`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ labels }),
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        showStatus("error", err.error || "Could not save tier names.");
-      }
-    } catch (e) {
-      showStatus("error", "Could not save tier names.");
-    }
-  });
+  const loadGbbLabels = makeLabelField(gbbLabels, "gbb-labels");
+  const loadConditionLabels = makeLabelField(conditionLabels, "condition-labels");
 
   pricingConfigToggle.addEventListener("click", async () => {
     const wasVisible = pricingDeptPanel.classList.contains("visible");
@@ -383,6 +404,7 @@
       loadDepartments();
     }
     loadGbbLabels();
+    loadConditionLabels();
   });
 
   async function loadDepartments() {

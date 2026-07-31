@@ -12,6 +12,7 @@ from sheet_builder import (
     build_category_workbook,
     build_pricing_workbook,
     build_gbb_workbook,
+    build_quality_condition_workbook,
     list_departments,
     NoDataError,
 )
@@ -113,6 +114,31 @@ def set_gbb_labels(company_id):
     return "", 204
 
 
+@app.route("/companies/<company_id>/condition-labels", methods=["GET"])
+def get_condition_labels(company_id):
+    company = companies.get_company(company_id)
+    if not company:
+        return jsonify({"error": "Unknown company."}), 404
+    return jsonify({"labels": company.get("condition_labels", companies.DEFAULT_CONDITION_LABELS)})
+
+
+@app.route("/companies/<company_id>/condition-labels", methods=["POST"])
+def set_condition_labels(company_id):
+    company = companies.get_company(company_id)
+    if not company:
+        return jsonify({"error": "Unknown company."}), 404
+
+    data = request.get_json(force=True)
+    labels = data.get("labels")
+    if not isinstance(labels, list) or len(labels) == 0 or not all(
+        isinstance(l, str) and l.strip() for l in labels
+    ):
+        return jsonify({"error": "'labels' must be a non-empty list of non-blank tier names."}), 400
+
+    companies.set_condition_labels(company_id, [l.strip() for l in labels])
+    return "", 204
+
+
 def _sync(company_id, kind):
     company = companies.get_company(company_id)
     if not company:
@@ -137,11 +163,17 @@ def _sync(company_id, kind):
         build_fn = build_pricing_workbook
         label = "Pricing"
         extra_kwargs["included_department_codes"] = company.get("list_pricing_departments")
-    else:
+    elif kind == "gbb":
         template_bytes = PRICING_TEMPLATE_PATH.read_bytes()
         build_fn = build_gbb_workbook
         label = "GBB_Pricing"
         extra_kwargs["labels"] = company.get("gbb_labels", companies.DEFAULT_GBB_LABELS)
+    else:
+        template_bytes = PRICING_TEMPLATE_PATH.read_bytes()
+        build_fn = build_quality_condition_workbook
+        label = "Quality_Condition_Pricing"
+        extra_kwargs["quality_labels"] = company.get("gbb_labels", companies.DEFAULT_GBB_LABELS)
+        extra_kwargs["condition_labels"] = company.get("condition_labels", companies.DEFAULT_CONDITION_LABELS)
 
     try:
         out_bytes, row_count = build_fn(template_bytes, items, **extra_kwargs)
@@ -178,6 +210,11 @@ def sync_pricing(company_id):
 @app.route("/sync/gbb/<company_id>", methods=["POST"])
 def sync_gbb(company_id):
     return _sync(company_id, "gbb")
+
+
+@app.route("/sync/quality-condition/<company_id>", methods=["POST"])
+def sync_quality_condition(company_id):
+    return _sync(company_id, "quality_condition")
 
 
 if __name__ == "__main__":

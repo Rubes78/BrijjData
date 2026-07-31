@@ -62,10 +62,24 @@ DEFAULT_GBB_LABELS = ["Good", "Better", "Best"]
 
 def set_gbb_labels(company_id, labels):
     """labels: ordered list of tier names, lowest price first. Its length is
-    the number of GBB levels — there's no separate "levels" count to keep in sync."""
+    the number of GBB levels — there's no separate "levels" count to keep in sync.
+    Also used as the Quality axis for Quality and Condition by Department, so
+    there's one place to name Good/Better/Best-style tiers, not two."""
     companies = _load()
     for c in companies:
         if c["id"] == company_id:
             c["gbb_labels"] = labels
+            break
+    _save(companies)
+
+
+DEFAULT_CONDITION_LABELS = ["Distressed", "Average", "Like New"]
+
+
+def set_condition_labels(company_id, labels):
+    companies = _load()
+    for c in companies:
+        if c["id"] == company_id:
+            c["condition_labels"] = labels
             break
     _save(companies)

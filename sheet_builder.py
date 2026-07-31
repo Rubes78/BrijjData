@@ -118,24 +118,35 @@ PRICE_LIST_SHEET_NAME = "Price Lists by Department"
 DEFAULT_STORE_GROUP = "Standard"
 
 
-def build_pricing_workbook(template_bytes, items, included_department_codes=None):
-    """included_department_codes: None means include every department; otherwise
-    only items whose category_code is in this set/list are synced."""
+def _collect_department_prices(items, included_department_codes=None):
+    """Returns {dept_name: [price, price, ...]} for items with a price_1 set,
+    restricted to included_department_codes if given (None = every department)."""
     included = set(included_department_codes) if included_department_codes is not None else None
-
-    prices = set()  # (dept_name, price)
+    dept_prices = OrderedDict()
     for it in items:
         code = (it.get("category_code") or "").strip()
         if not code:
             continue
         if included is not None and code not in included:
             continue
-        desc = (it.get("category_code_description") or "").strip()
-        dept_name = desc if desc else code.title()
         price = it.get("price_1")
         if price is None:
             continue
-        prices.add((dept_name, round(float(price), 2)))
+        desc = (it.get("category_code_description") or "").strip()
+        dept_name = desc if desc else code.title()
+        dept_prices.setdefault(dept_name, []).append(float(price))
+    return dept_prices
+
+
+def build_pricing_workbook(template_bytes, items, included_department_codes=None):
+    """included_department_codes: None means include every department; otherwise
+    only items whose category_code is in this set/list are synced."""
+    dept_prices = _collect_department_prices(items, included_department_codes)
+    prices = {
+        (dept_name, round(price, 2))
+        for dept_name, dept_price_list in dept_prices.items()
+        for price in dept_price_list
+    }
 
     if not prices:
         raise NoDataError(
@@ -163,45 +174,34 @@ def build_pricing_workbook(template_bytes, items, included_department_codes=None
 GBB_SHEET_NAME = "GBB by Department"
 
 
-def _bucket_medians(prices, levels):
-    """Split a sorted list of prices into `levels` equal-count buckets and
-    return the median of each non-empty bucket, ascending. Buckets that end up
-    empty (fewer distinct price observations than levels) are skipped."""
+def _bucket_groups(prices, k):
+    """Split a sorted list of prices into k equal-count buckets (quantile-style)
+    and return the k price-lists in ascending order. Buckets can be empty if
+    there are fewer observations than k."""
     prices = sorted(prices)
     n = len(prices)
-    sizes = [n // levels + (1 if i < n % levels else 0) for i in range(levels)]
+    sizes = [n // k + (1 if i < n % k else 0) for i in range(k)]
 
-    medians = []
+    groups = []
     idx = 0
     for size in sizes:
-        if size == 0:
-            medians.append(None)
-            continue
-        bucket = prices[idx:idx + size]
+        groups.append(prices[idx:idx + size])
         idx += size
-        medians.append(round(statistics.median(bucket), 2))
-    return medians
+    return groups
+
+
+def _bucket_medians(prices, levels):
+    """Split a sorted list of prices into `levels` equal-count buckets and
+    return the median of each bucket, ascending. Empty buckets (fewer price
+    observations than levels) come back as None."""
+    return [round(statistics.median(g), 2) if g else None for g in _bucket_groups(prices, levels)]
 
 
 def build_gbb_workbook(template_bytes, items, labels, included_department_codes=None):
     """labels: ordered tier names, lowest price first (e.g. ["Good", "Better", "Best"]).
     The number of levels is simply len(labels) — there's no separate count to keep in sync."""
     levels = len(labels)
-    included = set(included_department_codes) if included_department_codes is not None else None
-
-    dept_prices = OrderedDict()  # dept_name -> [prices]
-    for it in items:
-        code = (it.get("category_code") or "").strip()
-        if not code:
-            continue
-        if included is not None and code not in included:
-            continue
-        price = it.get("price_1")
-        if price is None:
-            continue
-        desc = (it.get("category_code_description") or "").strip()
-        dept_name = desc if desc else code.title()
-        dept_prices.setdefault(dept_name, []).append(float(price))
+    dept_prices = _collect_department_prices(items, included_department_codes)
 
     if not dept_prices:
         raise NoDataError("No items matched the selected departments with a price_1 set — nothing to sync.")
@@ -228,6 +228,55 @@ def build_gbb_workbook(template_bytes, items, labels, included_department_codes=
 
     if row_count == 0:
         raise NoDataError("Not enough price data per department to build any GBB tiers.")
+
+    out = io.BytesIO()
+    wb.save(out)
+    return out.getvalue(), row_count
+
+
+QUALITY_CONDITION_SHEET_NAME = "Quality and Condition by Depart"
+
+
+def build_quality_condition_workbook(
+    template_bytes, items, quality_labels, condition_labels, included_department_codes=None
+):
+    """quality_labels / condition_labels: ordered tier names, lowest price first for each axis.
+    Per department, prices are bucketed into len(quality_labels) equal-count groups first
+    (broad tiers), then each of those groups is further bucketed into len(condition_labels)
+    equal-count sub-groups (fine tiers) — mirroring the ascending Quality-then-Condition
+    price progression already used in the hand-built Quality and Condition by Category sheet."""
+    dept_prices = _collect_department_prices(items, included_department_codes)
+
+    if not dept_prices:
+        raise NoDataError("No items matched the selected departments with a price_1 set — nothing to sync.")
+
+    wb = openpyxl.load_workbook(io.BytesIO(template_bytes))
+    if QUALITY_CONDITION_SHEET_NAME not in wb.sheetnames:
+        raise NoDataError(f'Pricing template is missing the "{QUALITY_CONDITION_SHEET_NAME}" sheet.')
+    ws = wb[QUALITY_CONDITION_SHEET_NAME]
+    _clear_data_rows(ws)
+
+    row_num = 2
+    row_count = 0
+    for dept_name in sorted(dept_prices):
+        quality_groups = _bucket_groups(dept_prices[dept_name], len(quality_labels))
+        for quality_label, quality_group in zip(quality_labels, quality_groups):
+            if not quality_group:
+                continue
+            condition_medians = _bucket_medians(quality_group, len(condition_labels))
+            for condition_label, price in zip(condition_labels, condition_medians):
+                if price is None:
+                    continue
+                ws.cell(row=row_num, column=1).value = DEFAULT_STORE_GROUP
+                ws.cell(row=row_num, column=2).value = dept_name
+                ws.cell(row=row_num, column=3).value = quality_label
+                ws.cell(row=row_num, column=4).value = condition_label
+                ws.cell(row=row_num, column=5).value = price
+                row_num += 1
+                row_count += 1
+
+    if row_count == 0:
+        raise NoDataError("Not enough price data per department to build any Quality/Condition tiers.")
 
     out = io.BytesIO()
     wb.save(out)
