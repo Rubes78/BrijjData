@@ -10,11 +10,10 @@ from rcsaero_client import fetch_all_items, RcsAeroError
 from sheet_builder import (
     build_department_workbook,
     build_category_workbook,
-    build_pricing_workbook,
-    build_gbb_workbook,
-    build_quality_condition_workbook,
+    build_combined_pricing_workbook,
     list_departments,
     NoDataError,
+    VALID_MODELS,
 )
 
 app = Flask(__name__)
@@ -55,6 +54,23 @@ def remove_company(company_id):
     return "", 204
 
 
+def _effective_department_models(company):
+    """{category_code: model}. If the company has never configured this, every
+    department defaults to List Pricing (the original all-List behavior) —
+    except when an old-style list_pricing_departments boolean list exists from
+    before per-department models existed, which is honored as a one-time
+    migration default (those codes -> "list", everything else -> excluded)."""
+    stored = company.get("department_pricing_models")
+    if stored is not None:
+        return stored
+
+    legacy_included = company.get("list_pricing_departments")
+    if legacy_included is not None:
+        return {code: "list" for code in legacy_included}
+
+    return None  # signals "default every department to list" to callers
+
+
 @app.route("/companies/<company_id>/departments", methods=["GET"])
 def get_departments(company_id):
     company = companies.get_company(company_id)
@@ -67,25 +83,29 @@ def get_departments(company_id):
         return jsonify({"error": str(e)}), 502
 
     depts = list_departments(items)
-    selected = company.get("list_pricing_departments")  # None = all included
+    models = _effective_department_models(company)
     for d in depts:
-        d["included"] = True if selected is None else d["code"] in selected
+        d["model"] = "list" if models is None else models.get(d["code"], "none")
 
     return jsonify(depts)
 
 
-@app.route("/companies/<company_id>/pricing-departments", methods=["POST"])
-def set_pricing_departments(company_id):
+@app.route("/companies/<company_id>/department-models", methods=["POST"])
+def set_department_models(company_id):
     company = companies.get_company(company_id)
     if not company:
         return jsonify({"error": "Unknown company."}), 404
 
     data = request.get_json(force=True)
-    included = data.get("included")
-    if not isinstance(included, list):
-        return jsonify({"error": "'included' must be a list of department codes."}), 400
+    models = data.get("models")
+    if not isinstance(models, dict) or not all(
+        isinstance(k, str) and v in VALID_MODELS for k, v in models.items()
+    ):
+        return jsonify({
+            "error": f"'models' must be a dict of department code -> one of {sorted(VALID_MODELS)}."
+        }), 400
 
-    companies.set_list_pricing_departments(company_id, included)
+    companies.set_department_pricing_models(company_id, models)
     return "", 204
 
 
@@ -149,31 +169,29 @@ def _sync(company_id, kind):
     except RcsAeroError as e:
         return jsonify({"error": str(e)}), 502
 
-    extra_kwargs = {}
     if kind == "department":
         template_bytes = DEPT_TEMPLATE_PATH.read_bytes()
         build_fn = build_department_workbook
+        extra_kwargs = {}
         label = "Department"
     elif kind == "category":
         template_bytes = CAT_TEMPLATE_PATH.read_bytes()
         build_fn = build_category_workbook
+        extra_kwargs = {}
         label = "Category"
-    elif kind == "pricing":
-        template_bytes = PRICING_TEMPLATE_PATH.read_bytes()
-        build_fn = build_pricing_workbook
-        label = "Pricing"
-        extra_kwargs["included_department_codes"] = company.get("list_pricing_departments")
-    elif kind == "gbb":
-        template_bytes = PRICING_TEMPLATE_PATH.read_bytes()
-        build_fn = build_gbb_workbook
-        label = "GBB_Pricing"
-        extra_kwargs["labels"] = company.get("gbb_labels", companies.DEFAULT_GBB_LABELS)
     else:
         template_bytes = PRICING_TEMPLATE_PATH.read_bytes()
-        build_fn = build_quality_condition_workbook
-        label = "Quality_Condition_Pricing"
-        extra_kwargs["quality_labels"] = company.get("gbb_labels", companies.DEFAULT_GBB_LABELS)
-        extra_kwargs["condition_labels"] = company.get("condition_labels", companies.DEFAULT_CONDITION_LABELS)
+        build_fn = build_combined_pricing_workbook
+        models = _effective_department_models(company)
+        if models is None:
+            depts = list_departments(items)
+            models = {d["code"]: "list" for d in depts}
+        extra_kwargs = {
+            "department_models": models,
+            "gbb_labels": company.get("gbb_labels", companies.DEFAULT_GBB_LABELS),
+            "condition_labels": company.get("condition_labels", companies.DEFAULT_CONDITION_LABELS),
+        }
+        label = "Pricing"
 
     try:
         out_bytes, row_count = build_fn(template_bytes, items, **extra_kwargs)
@@ -205,16 +223,6 @@ def sync_category(company_id):
 @app.route("/sync/pricing/<company_id>", methods=["POST"])
 def sync_pricing(company_id):
     return _sync(company_id, "pricing")
-
-
-@app.route("/sync/gbb/<company_id>", methods=["POST"])
-def sync_gbb(company_id):
-    return _sync(company_id, "gbb")
-
-
-@app.route("/sync/quality-condition/<company_id>", methods=["POST"])
-def sync_quality_condition(company_id):
-    return _sync(company_id, "quality_condition")
 
 
 if __name__ == "__main__":

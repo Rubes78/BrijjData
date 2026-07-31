@@ -109,33 +109,26 @@
       font-size: 0.78rem;
     }
 
-    .pricing-config-toggle {
-      font-size: 0.82rem;
-      color: #818cf8;
-      cursor: pointer;
-      margin-top: 0.9rem;
-      display: inline-block;
-    }
-
-    #pricingDeptPanel { display: none; margin-top: 0.75rem; }
-    #pricingDeptPanel.visible { display: block; }
-
     .dept-list {
-      max-height: 220px;
+      max-height: 320px;
       overflow-y: auto;
       border: 1px solid #2d3148;
       border-radius: 8px;
-      padding: 0.6rem 0.8rem;
+      padding: 0.5rem 0.7rem;
     }
     .dept-item {
       display: flex;
       align-items: center;
-      gap: 0.6rem;
+      justify-content: space-between;
+      gap: 0.75rem;
       font-size: 0.85rem;
-      padding: 0.3rem 0;
+      padding: 0.4rem 0;
+      border-bottom: 1px solid #1e2235;
     }
-    .dept-item input { width: auto; }
-    .dept-item label { margin: 0; color: #e2e8f0; font-size: 0.85rem; }
+    .dept-item:last-child { border-bottom: none; }
+    .dept-item .dept-name { color: #e2e8f0; }
+    .dept-item .dept-code { color: #64748b; font-size: 0.75rem; }
+    .dept-item select { width: auto; min-width: 160px; padding: 0.35rem 0.5rem; margin: 0; }
     .dept-loading { font-size: 0.82rem; color: #64748b; padding: 0.4rem 0; }
 
     .spinner {
@@ -185,30 +178,21 @@
   <div class="sync-buttons">
     <button class="btn green" id="deptBtn" disabled>Download Department Data</button>
     <button class="btn green" id="catBtn" disabled>Download Category Data</button>
-    <button class="btn green" id="priceBtn" disabled>Download Pricing Data (List Pricing)</button>
-  </div>
-
-  <span class="pricing-config-toggle" id="pricingConfigToggle">Configure departments for List Pricing</span>
-
-  <div id="pricingDeptPanel">
-    <div class="dept-list" id="deptList"></div>
   </div>
 
   <div class="divider"></div>
-
-  <button class="btn green" id="gbbBtn" disabled>Download GBB Data (by Department)</button>
 
   <label for="gbbLabels">Quality tier names, lowest price first (comma-separated)</label>
   <input type="text" id="gbbLabels" value="Good, Better, Best">
-  <p class="subtitle" style="margin-top: 0.5rem; margin-bottom: 0;">Per department, prices are auto-derived by splitting that department's price data into equal-count tiers (median of each tier) — one tier per name you list here, in ascending price order. Also used as the Quality axis below.</p>
-
-  <div class="divider"></div>
-
-  <button class="btn green" id="qcBtn" disabled>Download Quality &amp; Condition Data (by Department)</button>
 
   <label for="conditionLabels">Condition tier names, lowest price first (comma-separated)</label>
   <input type="text" id="conditionLabels" value="Distressed, Average, Like New">
-  <p class="subtitle" style="margin-top: 0.5rem; margin-bottom: 0;">Per department, prices are first split into Quality tiers (using the names above), then each Quality tier is further split into these Condition tiers — same equal-count/median approach, nested.</p>
+  <p class="subtitle" style="margin-top: 0.5rem; margin-bottom: 1rem;">Used by any department set to GBB or Quality &amp; Condition below. Prices are auto-derived per department by splitting its price data into equal-count tiers (median of each) — Quality &amp; Condition nests Condition tiers inside each Quality tier.</p>
+
+  <label>Pricing model per department — each department gets exactly one</label>
+  <div class="dept-list" id="deptList"></div>
+
+  <button class="btn green" id="priceBtn" disabled style="margin-top: 1.25rem;">Download Pricing Data</button>
 
   <div class="status" id="status"></div>
 </div>
@@ -221,14 +205,17 @@
   const deptBtn         = document.getElementById("deptBtn");
   const catBtn          = document.getElementById("catBtn");
   const priceBtn        = document.getElementById("priceBtn");
-  const pricingConfigToggle = document.getElementById("pricingConfigToggle");
-  const pricingDeptPanel    = document.getElementById("pricingDeptPanel");
   const deptList         = document.getElementById("deptList");
-  const gbbBtn           = document.getElementById("gbbBtn");
   const gbbLabels        = document.getElementById("gbbLabels");
-  const qcBtn            = document.getElementById("qcBtn");
   const conditionLabels  = document.getElementById("conditionLabels");
   const statusBox       = document.getElementById("status");
+
+  const PRICING_MODELS = [
+    { value: "none", label: "No pricing" },
+    { value: "list", label: "List Pricing" },
+    { value: "gbb", label: "GBB" },
+    { value: "quality_condition", label: "Quality & Condition" },
+  ];
 
   let allCompanies = JSON.parse('{{ companies | tojson | safe }}');
 
@@ -242,8 +229,6 @@
       deptBtn.disabled = true;
       catBtn.disabled = true;
       priceBtn.disabled = true;
-      gbbBtn.disabled = true;
-      qcBtn.disabled = true;
       return;
     }
     for (const c of allCompanies) {
@@ -255,10 +240,9 @@
     deptBtn.disabled = false;
     catBtn.disabled = false;
     priceBtn.disabled = false;
-    gbbBtn.disabled = false;
-    qcBtn.disabled = false;
     loadGbbLabels();
     loadConditionLabels();
+    loadDepartments();
   }
 
   addToggle.addEventListener("click", () => {
@@ -345,8 +329,6 @@
   deptBtn.addEventListener("click", () => runSync("department", deptBtn));
   catBtn.addEventListener("click", () => runSync("category", catBtn));
   priceBtn.addEventListener("click", () => runSync("pricing", priceBtn));
-  gbbBtn.addEventListener("click", () => runSync("gbb", gbbBtn));
-  qcBtn.addEventListener("click", () => runSync("quality-condition", qcBtn));
 
   function makeLabelField(inputEl, endpoint) {
     async function load() {
@@ -390,20 +372,10 @@
   const loadGbbLabels = makeLabelField(gbbLabels, "gbb-labels");
   const loadConditionLabels = makeLabelField(conditionLabels, "condition-labels");
 
-  pricingConfigToggle.addEventListener("click", async () => {
-    const wasVisible = pricingDeptPanel.classList.contains("visible");
-    pricingDeptPanel.classList.toggle("visible");
-    if (!wasVisible) {
-      await loadDepartments();
-    }
-  });
-
   companySelect.addEventListener("change", () => {
-    if (pricingDeptPanel.classList.contains("visible")) {
-      loadDepartments();
-    }
     loadGbbLabels();
     loadConditionLabels();
+    loadDepartments();
   });
 
   async function loadDepartments() {
@@ -427,16 +399,29 @@
       for (const d of depts) {
         const item = document.createElement("div");
         item.className = "dept-item";
-        const cb = document.createElement("input");
-        cb.type = "checkbox";
-        cb.checked = d.included;
-        cb.id = `dept_${d.code}`;
-        cb.addEventListener("change", saveDepartmentSelection);
-        const lbl = document.createElement("label");
-        lbl.htmlFor = cb.id;
-        lbl.textContent = `${d.description} (${d.code})`;
-        item.appendChild(cb);
-        item.appendChild(lbl);
+
+        const nameSpan = document.createElement("span");
+        nameSpan.className = "dept-name";
+        nameSpan.textContent = d.description;
+        const codeSpan = document.createElement("span");
+        codeSpan.className = "dept-code";
+        codeSpan.textContent = d.code;
+        nameSpan.appendChild(document.createElement("br"));
+        nameSpan.appendChild(codeSpan);
+
+        const select = document.createElement("select");
+        select.dataset.code = d.code;
+        for (const m of PRICING_MODELS) {
+          const opt = document.createElement("option");
+          opt.value = m.value;
+          opt.textContent = m.label;
+          if (m.value === d.model) opt.selected = true;
+          select.appendChild(opt);
+        }
+        select.addEventListener("change", saveDepartmentModels);
+
+        item.appendChild(nameSpan);
+        item.appendChild(select);
         deptList.appendChild(item);
       }
     } catch (e) {
@@ -444,19 +429,25 @@
     }
   }
 
-  async function saveDepartmentSelection() {
+  async function saveDepartmentModels() {
     const companyId = companySelect.value;
     if (!companyId) return;
-    const included = Array.from(deptList.querySelectorAll('input[type="checkbox"]:checked'))
-      .map(cb => cb.id.replace(/^dept_/, ""));
+    const models = {};
+    for (const sel of deptList.querySelectorAll("select")) {
+      if (sel.value !== "none") models[sel.dataset.code] = sel.value;
+    }
     try {
-      await fetch(`/companies/${companyId}/pricing-departments`, {
+      const res = await fetch(`/companies/${companyId}/department-models`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ included }),
+        body: JSON.stringify({ models }),
       });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        showStatus("error", err.error || "Could not save pricing model selection.");
+      }
     } catch (e) {
-      showStatus("error", "Could not save department selection.");
+      showStatus("error", "Could not save pricing model selection.");
     }
   }
 

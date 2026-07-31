@@ -46,13 +46,15 @@ def delete_company(company_id):
     _save(companies)
 
 
-def set_list_pricing_departments(company_id, department_codes):
-    """Persist which department codes are included in the List Pricing sync.
-    None means "all departments" (the default until the user narrows it down)."""
+def set_department_pricing_models(company_id, department_models):
+    """department_models: {category_code: "list" | "gbb" | "quality_condition"}.
+    A department not present here gets no pricing model at all — it's excluded
+    entirely from the combined pricing sync. Each department maps to exactly one
+    model; there's no separate per-model inclusion list anymore."""
     companies = _load()
     for c in companies:
         if c["id"] == company_id:
-            c["list_pricing_departments"] = department_codes
+            c["department_pricing_models"] = department_models
             break
     _save(companies)
 
