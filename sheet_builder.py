@@ -1,4 +1,5 @@
 import io
+import statistics
 from collections import OrderedDict
 
 import openpyxl
@@ -157,3 +158,84 @@ def build_pricing_workbook(template_bytes, items, included_department_codes=None
     out = io.BytesIO()
     wb.save(out)
     return out.getvalue(), len(prices)
+
+
+GBB_SHEET_NAME = "GBB by Department"
+
+
+def _quality_labels(levels):
+    if levels == 3:
+        return ["Good", "Better", "Best"]
+    if levels == 2:
+        return ["Good", "Best"]
+    return [f"Tier {i + 1}" for i in range(levels)]
+
+
+def _bucket_medians(prices, levels):
+    """Split a sorted list of prices into `levels` equal-count buckets and
+    return the median of each non-empty bucket, ascending. Buckets that end up
+    empty (fewer distinct price observations than levels) are skipped."""
+    prices = sorted(prices)
+    n = len(prices)
+    sizes = [n // levels + (1 if i < n % levels else 0) for i in range(levels)]
+
+    medians = []
+    idx = 0
+    for size in sizes:
+        if size == 0:
+            medians.append(None)
+            continue
+        bucket = prices[idx:idx + size]
+        idx += size
+        medians.append(round(statistics.median(bucket), 2))
+    return medians
+
+
+def build_gbb_workbook(template_bytes, items, levels, included_department_codes=None):
+    included = set(included_department_codes) if included_department_codes is not None else None
+
+    dept_prices = OrderedDict()  # dept_name -> [prices]
+    for it in items:
+        code = (it.get("category_code") or "").strip()
+        if not code:
+            continue
+        if included is not None and code not in included:
+            continue
+        price = it.get("price_1")
+        if price is None:
+            continue
+        desc = (it.get("category_code_description") or "").strip()
+        dept_name = desc if desc else code.title()
+        dept_prices.setdefault(dept_name, []).append(float(price))
+
+    if not dept_prices:
+        raise NoDataError("No items matched the selected departments with a price_1 set — nothing to sync.")
+
+    labels = _quality_labels(levels)
+
+    wb = openpyxl.load_workbook(io.BytesIO(template_bytes))
+    if GBB_SHEET_NAME not in wb.sheetnames:
+        raise NoDataError(f'Pricing template is missing the "{GBB_SHEET_NAME}" sheet.')
+    ws = wb[GBB_SHEET_NAME]
+    _clear_data_rows(ws)
+
+    row_num = 2
+    row_count = 0
+    for dept_name in sorted(dept_prices):
+        medians = _bucket_medians(dept_prices[dept_name], levels)
+        for label, price in zip(labels, medians):
+            if price is None:
+                continue
+            ws.cell(row=row_num, column=1).value = DEFAULT_STORE_GROUP
+            ws.cell(row=row_num, column=2).value = dept_name
+            ws.cell(row=row_num, column=3).value = label
+            ws.cell(row=row_num, column=4).value = price
+            row_num += 1
+            row_count += 1
+
+    if row_count == 0:
+        raise NoDataError("Not enough price data per department to build any GBB tiers.")
+
+    out = io.BytesIO()
+    wb.save(out)
+    return out.getvalue(), row_count

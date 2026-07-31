@@ -55,3 +55,15 @@ def set_list_pricing_departments(company_id, department_codes):
             c["list_pricing_departments"] = department_codes
             break
     _save(companies)
+
+
+DEFAULT_GBB_LEVELS = 3
+
+
+def set_gbb_levels(company_id, levels):
+    companies = _load()
+    for c in companies:
+        if c["id"] == company_id:
+            c["gbb_levels"] = levels
+            break
+    _save(companies)

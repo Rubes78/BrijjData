@@ -194,6 +194,19 @@
     <div class="dept-list" id="deptList"></div>
   </div>
 
+  <div class="divider"></div>
+
+  <div class="row" style="align-items: flex-end;">
+    <div style="flex: 2;">
+      <button class="btn green" id="gbbBtn" disabled style="margin-top: 0;">Download GBB Data (by Department)</button>
+    </div>
+    <div style="flex: 1;">
+      <label for="gbbLevels" style="margin-top: 0;">Price levels</label>
+      <input type="number" id="gbbLevels" min="1" value="3">
+    </div>
+  </div>
+  <p class="subtitle" style="margin-top: 0.5rem; margin-bottom: 0;">Per department, prices are auto-derived by splitting that department's price data into this many equal-count tiers (median of each tier). 3 levels → Good/Better/Best; other counts → Tier 1..N.</p>
+
   <div class="status" id="status"></div>
 </div>
 
@@ -208,6 +221,8 @@
   const pricingConfigToggle = document.getElementById("pricingConfigToggle");
   const pricingDeptPanel    = document.getElementById("pricingDeptPanel");
   const deptList         = document.getElementById("deptList");
+  const gbbBtn           = document.getElementById("gbbBtn");
+  const gbbLevels        = document.getElementById("gbbLevels");
   const statusBox       = document.getElementById("status");
 
   let allCompanies = JSON.parse('{{ companies | tojson | safe }}');
@@ -222,6 +237,7 @@
       deptBtn.disabled = true;
       catBtn.disabled = true;
       priceBtn.disabled = true;
+      gbbBtn.disabled = true;
       return;
     }
     for (const c of allCompanies) {
@@ -233,6 +249,8 @@
     deptBtn.disabled = false;
     catBtn.disabled = false;
     priceBtn.disabled = false;
+    gbbBtn.disabled = false;
+    loadGbbLevels();
   }
   renderCompanies();
 
@@ -320,6 +338,35 @@
   deptBtn.addEventListener("click", () => runSync("department", deptBtn));
   catBtn.addEventListener("click", () => runSync("category", catBtn));
   priceBtn.addEventListener("click", () => runSync("pricing", priceBtn));
+  gbbBtn.addEventListener("click", () => runSync("gbb", gbbBtn));
+
+  async function loadGbbLevels() {
+    const companyId = companySelect.value;
+    if (!companyId) return;
+    try {
+      const res = await fetch(`/companies/${companyId}/gbb-levels`);
+      const data = await res.json();
+      if (res.ok) gbbLevels.value = data.levels;
+    } catch (e) {
+      // leave whatever value is currently in the field
+    }
+  }
+
+  gbbLevels.addEventListener("change", async () => {
+    const companyId = companySelect.value;
+    if (!companyId) return;
+    const levels = parseInt(gbbLevels.value, 10);
+    if (!levels || levels < 1) return;
+    try {
+      await fetch(`/companies/${companyId}/gbb-levels`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ levels }),
+      });
+    } catch (e) {
+      showStatus("error", "Could not save GBB level count.");
+    }
+  });
 
   pricingConfigToggle.addEventListener("click", async () => {
     const wasVisible = pricingDeptPanel.classList.contains("visible");
@@ -333,6 +380,7 @@
     if (pricingDeptPanel.classList.contains("visible")) {
       loadDepartments();
     }
+    loadGbbLevels();
   });
 
   async function loadDepartments() {

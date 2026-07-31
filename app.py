@@ -11,6 +11,7 @@ from sheet_builder import (
     build_department_workbook,
     build_category_workbook,
     build_pricing_workbook,
+    build_gbb_workbook,
     list_departments,
     NoDataError,
 )
@@ -87,6 +88,29 @@ def set_pricing_departments(company_id):
     return "", 204
 
 
+@app.route("/companies/<company_id>/gbb-levels", methods=["GET"])
+def get_gbb_levels(company_id):
+    company = companies.get_company(company_id)
+    if not company:
+        return jsonify({"error": "Unknown company."}), 404
+    return jsonify({"levels": company.get("gbb_levels", companies.DEFAULT_GBB_LEVELS)})
+
+
+@app.route("/companies/<company_id>/gbb-levels", methods=["POST"])
+def set_gbb_levels(company_id):
+    company = companies.get_company(company_id)
+    if not company:
+        return jsonify({"error": "Unknown company."}), 404
+
+    data = request.get_json(force=True)
+    levels = data.get("levels")
+    if not isinstance(levels, int) or levels < 1:
+        return jsonify({"error": "'levels' must be a positive integer."}), 400
+
+    companies.set_gbb_levels(company_id, levels)
+    return "", 204
+
+
 def _sync(company_id, kind):
     company = companies.get_company(company_id)
     if not company:
@@ -106,11 +130,16 @@ def _sync(company_id, kind):
         template_bytes = CAT_TEMPLATE_PATH.read_bytes()
         build_fn = build_category_workbook
         label = "Category"
-    else:
+    elif kind == "pricing":
         template_bytes = PRICING_TEMPLATE_PATH.read_bytes()
         build_fn = build_pricing_workbook
         label = "Pricing"
         extra_kwargs["included_department_codes"] = company.get("list_pricing_departments")
+    else:
+        template_bytes = PRICING_TEMPLATE_PATH.read_bytes()
+        build_fn = build_gbb_workbook
+        label = "GBB_Pricing"
+        extra_kwargs["levels"] = company.get("gbb_levels", companies.DEFAULT_GBB_LEVELS)
 
     try:
         out_bytes, row_count = build_fn(template_bytes, items, **extra_kwargs)
@@ -142,6 +171,11 @@ def sync_category(company_id):
 @app.route("/sync/pricing/<company_id>", methods=["POST"])
 def sync_pricing(company_id):
     return _sync(company_id, "pricing")
+
+
+@app.route("/sync/gbb/<company_id>", methods=["POST"])
+def sync_gbb(company_id):
+    return _sync(company_id, "gbb")
 
 
 if __name__ == "__main__":
