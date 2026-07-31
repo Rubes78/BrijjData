@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TPM Department / Category Sync</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #0f1117;
+      color: #e2e8f0;
+      min-height: 100vh;
+      display: flex;
+      align-items: flex-start;
+      justify-content: center;
+      padding: 3rem 2rem;
+    }
+
+    .card {
+      background: #1a1d27;
+      border: 1px solid #2d3148;
+      border-radius: 12px;
+      padding: 2.5rem;
+      width: 100%;
+      max-width: 640px;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+    }
+
+    h1 { font-size: 1.4rem; font-weight: 600; color: #f8fafc; margin-bottom: 0.35rem; }
+    .subtitle { font-size: 0.85rem; color: #64748b; margin-bottom: 2rem; }
+
+    label { display: block; font-size: 0.8rem; color: #94a3b8; margin-bottom: 0.3rem; margin-top: 1rem; }
+    select, input {
+      width: 100%;
+      padding: 0.6rem 0.7rem;
+      background: #0f1117;
+      border: 1px solid #334155;
+      border-radius: 8px;
+      color: #e2e8f0;
+      font-size: 0.9rem;
+    }
+    select:focus, input:focus { outline: none; border-color: #6366f1; }
+
+    .row { display: flex; gap: 0.75rem; }
+    .row > * { flex: 1; }
+
+    .btn {
+      display: block;
+      width: 100%;
+      margin-top: 1.25rem;
+      padding: 0.75rem;
+      background: #6366f1;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      font-size: 0.9rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.2s, opacity 0.2s;
+    }
+    .btn:hover:not(:disabled) { background: #4f46e5; }
+    .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+    .btn.secondary { background: #334155; }
+    .btn.secondary:hover:not(:disabled) { background: #475569; }
+    .btn.green { background: #16a34a; }
+    .btn.green:hover:not(:disabled) { background: #15803d; }
+
+    .sync-buttons { display: flex; gap: 0.75rem; margin-top: 1.5rem; }
+    .sync-buttons .btn { margin-top: 0; }
+
+    .divider { border-top: 1px solid #2d3148; margin: 2rem 0 1.5rem; }
+
+    .add-company-toggle {
+      font-size: 0.82rem;
+      color: #818cf8;
+      cursor: pointer;
+      margin-top: 0.5rem;
+      display: inline-block;
+    }
+
+    #addCompanyForm { display: none; margin-top: 1rem; }
+    #addCompanyForm.visible { display: block; }
+
+    .status {
+      margin-top: 1.25rem;
+      padding: 0.9rem 1rem;
+      border-radius: 8px;
+      font-size: 0.85rem;
+      display: none;
+    }
+    .status.visible { display: block; }
+    .status.error { background: rgba(239,68,68,0.1); border: 1px solid #ef4444; color: #f87171; }
+    .status.success { background: rgba(74,222,128,0.1); border: 1px solid #4ade80; color: #4ade80; }
+
+    .company-list { margin-top: 0.75rem; }
+    .company-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 0.82rem;
+      color: #94a3b8;
+      padding: 0.35rem 0;
+    }
+    .company-item .del {
+      color: #f87171;
+      cursor: pointer;
+      font-size: 0.78rem;
+    }
+
+    .spinner {
+      display: inline-block;
+      width: 14px;
+      height: 14px;
+      border: 2px solid rgba(255,255,255,0.3);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      margin-right: 0.5rem;
+      vertical-align: middle;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+<div class="card">
+  <h1>TPM Department / Category Sync</h1>
+  <p class="subtitle">Pull live Department and Category data from a company's rcsaero API into fresh import-ready spreadsheets.</p>
+
+  <label for="companySelect">Company</label>
+  <select id="companySelect"></select>
+
+  <span class="add-company-toggle" id="addToggle">+ Add a new company</span>
+
+  <div id="addCompanyForm">
+    <label for="newName">Company name</label>
+    <input type="text" id="newName" placeholder="e.g. Whiskered Thrifter">
+    <div class="row">
+      <div>
+        <label for="newApiId">API ID</label>
+        <input type="text" id="newApiId">
+      </div>
+      <div>
+        <label for="newApiKey">API Key</label>
+        <input type="password" id="newApiKey">
+      </div>
+    </div>
+    <label for="newBaseUrl">Base URL</label>
+    <input type="text" id="newBaseUrl" value="https://api.rcsaero.com">
+    <button class="btn secondary" id="saveCompanyBtn">Save Company</button>
+  </div>
+
+  <div class="divider"></div>
+
+  <div class="sync-buttons">
+    <button class="btn green" id="deptBtn" disabled>Download Department Data</button>
+    <button class="btn green" id="catBtn" disabled>Download Category Data</button>
+    <button class="btn green" id="priceBtn" disabled>Download Pricing Data</button>
+  </div>
+
+  <div class="status" id="status"></div>
+</div>
+
+<script>
+  const companySelect   = document.getElementById("companySelect");
+  const addToggle       = document.getElementById("addToggle");
+  const addCompanyForm  = document.getElementById("addCompanyForm");
+  const saveCompanyBtn  = document.getElementById("saveCompanyBtn");
+  const deptBtn         = document.getElementById("deptBtn");
+  const catBtn          = document.getElementById("catBtn");
+  const priceBtn        = document.getElementById("priceBtn");
+  const statusBox       = document.getElementById("status");
+
+  let allCompanies = JSON.parse('{{ companies | tojson | safe }}');
+
+  function renderCompanies() {
+    companySelect.innerHTML = "";
+    if (allCompanies.length === 0) {
+      const opt = document.createElement("option");
+      opt.textContent = "No companies yet — add one below";
+      opt.value = "";
+      companySelect.appendChild(opt);
+      deptBtn.disabled = true;
+      catBtn.disabled = true;
+      priceBtn.disabled = true;
+      return;
+    }
+    for (const c of allCompanies) {
+      const opt = document.createElement("option");
+      opt.value = c.id;
+      opt.textContent = c.name;
+      companySelect.appendChild(opt);
+    }
+    deptBtn.disabled = false;
+    catBtn.disabled = false;
+    priceBtn.disabled = false;
+  }
+  renderCompanies();
+
+  addToggle.addEventListener("click", () => {
+    addCompanyForm.classList.toggle("visible");
+  });
+
+  saveCompanyBtn.addEventListener("click", async () => {
+    const name = document.getElementById("newName").value.trim();
+    const api_id = document.getElementById("newApiId").value.trim();
+    const api_key = document.getElementById("newApiKey").value.trim();
+    const base_url = document.getElementById("newBaseUrl").value.trim();
+
+    if (!name || !api_id || !api_key) {
+      showStatus("error", "Company name, API ID, and API Key are required.");
+      return;
+    }
+
+    saveCompanyBtn.disabled = true;
+    saveCompanyBtn.textContent = "Saving...";
+
+    try {
+      const res = await fetch("/companies", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, api_id, api_key, base_url }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        showStatus("error", data.error || "Could not save company.");
+        return;
+      }
+      const listRes = await fetch("/companies");
+      allCompanies = await listRes.json();
+      renderCompanies();
+      companySelect.value = data.id;
+      addCompanyForm.classList.remove("visible");
+      document.getElementById("newName").value = "";
+      document.getElementById("newApiId").value = "";
+      document.getElementById("newApiKey").value = "";
+      showStatus("success", `Saved "${name}".`);
+    } catch (e) {
+      showStatus("error", "Network error while saving company.");
+    } finally {
+      saveCompanyBtn.disabled = false;
+      saveCompanyBtn.textContent = "Save Company";
+    }
+  });
+
+  async function runSync(kind, btn) {
+    const companyId = companySelect.value;
+    if (!companyId) return;
+
+    const original = btn.textContent;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span>Syncing...';
+    statusBox.classList.remove("visible");
+
+    try {
+      const res = await fetch(`/sync/${kind}/${companyId}`, { method: "POST" });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: "Sync failed." }));
+        showStatus("error", err.error || "Sync failed.");
+        return;
+      }
+      const rowCount = res.headers.get("X-Row-Count");
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      const disposition = res.headers.get("Content-Disposition") || "";
+      const nameMatch = disposition.match(/filename="?([^"]+)"?/);
+      a.download = nameMatch ? nameMatch[1] : `${kind}_sync.xlsx`;
+      a.href = url;
+      a.click();
+      URL.revokeObjectURL(url);
+      showStatus("success", `Downloaded ${a.download} — ${rowCount} rows.`);
+    } catch (e) {
+      showStatus("error", "Network error during sync.");
+    } finally {
+      btn.disabled = false;
+      btn.textContent = original;
+    }
+  }
+
+  deptBtn.addEventListener("click", () => runSync("department", deptBtn));
+  catBtn.addEventListener("click", () => runSync("category", catBtn));
+  priceBtn.addEventListener("click", () => runSync("pricing", priceBtn));
+
+  function showStatus(kind, msg) {
+    statusBox.className = `status visible ${kind}`;
+    statusBox.textContent = msg;
+  }
+</script>
+</body>
+</html>

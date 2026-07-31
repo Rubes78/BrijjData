@@ -1,0 +1,16 @@
+---
+services:
+  brijj-tpm-sync:
+    build: .
+    image: brijj-tpm-sync:latest
+    container_name: brijj-tpm-sync
+    environment:
+      - TZ=America/Chicago
+      - PUID=1000
+      - PGID=1000
+      - PORT=5000
+    volumes:
+      - /Quarks/Data/Dockers/brijj-tpm-sync:/data
+    ports:
+      - "5601:5000"
+    restart: unless-stopped
