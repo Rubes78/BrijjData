@@ -192,6 +192,9 @@
   <label>Pricing model per department — each department gets exactly one</label>
   <div class="dept-list" id="deptList"></div>
 
+  <label>Pricing model per category — each category gets exactly one (independent of its department's setting above)</label>
+  <div class="dept-list" id="catList"></div>
+
   <button class="btn green" id="priceBtn" disabled style="margin-top: 1.25rem;">Download Pricing Data</button>
 
   <div class="status" id="status"></div>
@@ -206,6 +209,7 @@
   const catBtn          = document.getElementById("catBtn");
   const priceBtn        = document.getElementById("priceBtn");
   const deptList         = document.getElementById("deptList");
+  const catList          = document.getElementById("catList");
   const gbbLabels        = document.getElementById("gbbLabels");
   const conditionLabels  = document.getElementById("conditionLabels");
   const statusBox       = document.getElementById("status");
@@ -243,6 +247,7 @@
     loadGbbLabels();
     loadConditionLabels();
     loadDepartments();
+    loadCategories();
   }
 
   addToggle.addEventListener("click", () => {
@@ -376,80 +381,93 @@
     loadGbbLabels();
     loadConditionLabels();
     loadDepartments();
+    loadCategories();
   });
 
-  async function loadDepartments() {
-    const companyId = companySelect.value;
-    if (!companyId) return;
-
-    deptList.innerHTML = '<div class="dept-loading"><span class="spinner"></span>Loading departments...</div>';
-
-    try {
-      const res = await fetch(`/companies/${companyId}/departments`);
-      const depts = await res.json();
-      if (!res.ok) {
-        deptList.innerHTML = `<div class="dept-loading">${escHtml(depts.error || "Could not load departments.")}</div>`;
-        return;
+  function makeModelList(listEl, loadPath, savePath, renderLabel, emptyMessage) {
+    async function save() {
+      const companyId = companySelect.value;
+      if (!companyId) return;
+      const models = {};
+      for (const sel of listEl.querySelectorAll("select")) {
+        if (sel.value !== "none") models[sel.dataset.code] = sel.value;
       }
-      if (depts.length === 0) {
-        deptList.innerHTML = '<div class="dept-loading">No departments found.</div>';
-        return;
-      }
-      deptList.innerHTML = "";
-      for (const d of depts) {
-        const item = document.createElement("div");
-        item.className = "dept-item";
-
-        const nameSpan = document.createElement("span");
-        nameSpan.className = "dept-name";
-        nameSpan.textContent = d.description;
-        const codeSpan = document.createElement("span");
-        codeSpan.className = "dept-code";
-        codeSpan.textContent = d.code;
-        nameSpan.appendChild(document.createElement("br"));
-        nameSpan.appendChild(codeSpan);
-
-        const select = document.createElement("select");
-        select.dataset.code = d.code;
-        for (const m of PRICING_MODELS) {
-          const opt = document.createElement("option");
-          opt.value = m.value;
-          opt.textContent = m.label;
-          if (m.value === d.model) opt.selected = true;
-          select.appendChild(opt);
+      try {
+        const res = await fetch(`/companies/${companyId}/${savePath}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ models }),
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          showStatus("error", err.error || "Could not save pricing model selection.");
         }
-        select.addEventListener("change", saveDepartmentModels);
-
-        item.appendChild(nameSpan);
-        item.appendChild(select);
-        deptList.appendChild(item);
+      } catch (e) {
+        showStatus("error", "Could not save pricing model selection.");
       }
-    } catch (e) {
-      deptList.innerHTML = '<div class="dept-loading">Network error loading departments.</div>';
     }
+
+    return async function load() {
+      const companyId = companySelect.value;
+      if (!companyId) return;
+
+      listEl.innerHTML = '<div class="dept-loading"><span class="spinner"></span>Loading...</div>';
+
+      try {
+        const res = await fetch(`/companies/${companyId}/${loadPath}`);
+        const rows = await res.json();
+        if (!res.ok) {
+          listEl.innerHTML = `<div class="dept-loading">${escHtml(rows.error || "Could not load.")}</div>`;
+          return;
+        }
+        if (rows.length === 0) {
+          listEl.innerHTML = `<div class="dept-loading">${escHtml(emptyMessage)}</div>`;
+          return;
+        }
+        listEl.innerHTML = "";
+        for (const row of rows) {
+          const item = document.createElement("div");
+          item.className = "dept-item";
+
+          const nameSpan = document.createElement("span");
+          nameSpan.className = "dept-name";
+          nameSpan.textContent = renderLabel(row);
+          const codeSpan = document.createElement("span");
+          codeSpan.className = "dept-code";
+          codeSpan.textContent = row.code;
+          nameSpan.appendChild(document.createElement("br"));
+          nameSpan.appendChild(codeSpan);
+
+          const select = document.createElement("select");
+          select.dataset.code = row.code;
+          for (const m of PRICING_MODELS) {
+            const opt = document.createElement("option");
+            opt.value = m.value;
+            opt.textContent = m.label;
+            if (m.value === row.model) opt.selected = true;
+            select.appendChild(opt);
+          }
+          select.addEventListener("change", save);
+
+          item.appendChild(nameSpan);
+          item.appendChild(select);
+          listEl.appendChild(item);
+        }
+      } catch (e) {
+        listEl.innerHTML = '<div class="dept-loading">Network error loading data.</div>';
+      }
+    };
   }
 
-  async function saveDepartmentModels() {
-    const companyId = companySelect.value;
-    if (!companyId) return;
-    const models = {};
-    for (const sel of deptList.querySelectorAll("select")) {
-      if (sel.value !== "none") models[sel.dataset.code] = sel.value;
-    }
-    try {
-      const res = await fetch(`/companies/${companyId}/department-models`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ models }),
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        showStatus("error", err.error || "Could not save pricing model selection.");
-      }
-    } catch (e) {
-      showStatus("error", "Could not save pricing model selection.");
-    }
-  }
+  const loadDepartments = makeModelList(
+    deptList, "departments", "department-models",
+    d => d.description, "No departments found."
+  );
+  const loadCategories = makeModelList(
+    catList, "categories", "category-models",
+    c => `${c.description} — ${c.department}`,
+    "No categories found (rcsaero items need both category_code and subcategory_code set)."
+  );
 
   function showStatus(kind, msg) {
     statusBox.className = `status visible ${kind}`;

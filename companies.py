@@ -59,6 +59,17 @@ def set_department_pricing_models(company_id, department_models):
     _save(companies)
 
 
+def set_category_pricing_models(company_id, category_models):
+    """category_models: {"{category_code}-{subcategory_code}": "list" | "gbb" | "quality_condition"}.
+    Same shape and semantics as department_pricing_models, one level finer-grained."""
+    companies = _load()
+    for c in companies:
+        if c["id"] == company_id:
+            c["category_pricing_models"] = category_models
+            break
+    _save(companies)
+
+
 DEFAULT_GBB_LABELS = ["Good", "Better", "Best"]
 
 

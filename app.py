@@ -12,6 +12,7 @@ from sheet_builder import (
     build_category_workbook,
     build_combined_pricing_workbook,
     list_departments,
+    list_categories,
     NoDataError,
     VALID_MODELS,
 )
@@ -109,6 +110,44 @@ def set_department_models(company_id):
     return "", 204
 
 
+@app.route("/companies/<company_id>/categories", methods=["GET"])
+def get_categories(company_id):
+    company = companies.get_company(company_id)
+    if not company:
+        return jsonify({"error": "Unknown company."}), 404
+
+    try:
+        items = fetch_all_items(company["api_id"], company["api_key"], company["base_url"])
+    except RcsAeroError as e:
+        return jsonify({"error": str(e)}), 502
+
+    cats = list_categories(items)
+    models = company.get("category_pricing_models", {})
+    for c in cats:
+        c["model"] = models.get(c["code"], "none")
+
+    return jsonify(cats)
+
+
+@app.route("/companies/<company_id>/category-models", methods=["POST"])
+def set_category_models(company_id):
+    company = companies.get_company(company_id)
+    if not company:
+        return jsonify({"error": "Unknown company."}), 404
+
+    data = request.get_json(force=True)
+    models = data.get("models")
+    if not isinstance(models, dict) or not all(
+        isinstance(k, str) and v in VALID_MODELS for k, v in models.items()
+    ):
+        return jsonify({
+            "error": f"'models' must be a dict of category code -> one of {sorted(VALID_MODELS)}."
+        }), 400
+
+    companies.set_category_pricing_models(company_id, models)
+    return "", 204
+
+
 @app.route("/companies/<company_id>/gbb-labels", methods=["GET"])
 def get_gbb_labels(company_id):
     company = companies.get_company(company_id)
@@ -188,6 +227,7 @@ def _sync(company_id, kind):
             models = {d["code"]: "list" for d in depts}
         extra_kwargs = {
             "department_models": models,
+            "category_models": company.get("category_pricing_models", {}),
             "gbb_labels": company.get("gbb_labels", companies.DEFAULT_GBB_LABELS),
             "condition_labels": company.get("condition_labels", companies.DEFAULT_CONDITION_LABELS),
         }

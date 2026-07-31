@@ -114,9 +114,32 @@ def list_departments(items):
     return [{"code": code, "description": depts[code] or code.title()} for code in sorted(depts)]
 
 
+def list_categories(items):
+    """Distinct (dept_code, sub_code) categories present in a set of rcsaero items
+    (only items with both set), sorted. Used to drive the pricing-category selection UI."""
+    cats = OrderedDict()  # composite_code -> (department_name, category_name)
+    for it in items:
+        dept_code = (it.get("category_code") or "").strip()
+        sub_code = (it.get("subcategory_code") or "").strip()
+        if not dept_code or not sub_code:
+            continue
+        dept_desc = (it.get("category_code_description") or "").strip()
+        sub_desc = (it.get("subcategory_code_description") or "").strip()
+        composite = f"{dept_code}-{sub_code}"
+        if composite not in cats:
+            cats[composite] = (dept_desc or dept_code.title(), sub_desc or sub_code.title())
+    return [
+        {"code": composite, "department": dept_name, "description": cat_name}
+        for composite, (dept_name, cat_name) in sorted(cats.items())
+    ]
+
+
 PRICE_LIST_SHEET_NAME = "Price Lists by Department"
 GBB_SHEET_NAME = "GBB by Department"
 QUALITY_CONDITION_SHEET_NAME = "Quality and Condition by Depart"
+CATEGORY_PRICE_LIST_SHEET_NAME = "Price Lists by Category and Sub"
+CATEGORY_GBB_SHEET_NAME = "GBB by Category and SubCategory"
+CATEGORY_QUALITY_CONDITION_SHEET_NAME = "Quality and Condition by Catego"
 DEFAULT_STORE_GROUP = "Standard"
 
 MODEL_LIST = "list"
@@ -139,6 +162,30 @@ def _collect_department_prices(items):
         desc = (it.get("category_code_description") or "").strip()
         name = desc if desc else code.title()
         entry = result.setdefault(code, {"name": name, "prices": []})
+        entry["prices"].append(float(price))
+    return result
+
+
+def _collect_category_prices(items):
+    """Returns {f"{dept_code}-{sub_code}": {"department": dept_name, "name": cat_name,
+    "prices": [...]}} for items with both category_code, subcategory_code, and price_1 set."""
+    result = OrderedDict()
+    for it in items:
+        dept_code = (it.get("category_code") or "").strip()
+        sub_code = (it.get("subcategory_code") or "").strip()
+        if not dept_code or not sub_code:
+            continue
+        price = it.get("price_1")
+        if price is None:
+            continue
+        dept_desc = (it.get("category_code_description") or "").strip()
+        sub_desc = (it.get("subcategory_code_description") or "").strip()
+        composite = f"{dept_code}-{sub_code}"
+        entry = result.setdefault(composite, {
+            "department": dept_desc or dept_code.title(),
+            "name": sub_desc or sub_code.title(),
+            "prices": [],
+        })
         entry["prices"].append(float(price))
     return result
 
@@ -192,71 +239,98 @@ def _quality_condition_tiers(prices, quality_labels, condition_labels):
     return rows
 
 
+def _write_rows(ws, next_row, prefix, rows):
+    """Writes `prefix` (a fixed list of leading column values, e.g. [Store Group, Department])
+    followed by each tuple in `rows` (the model-specific trailing columns) as one row per tuple.
+    Returns the updated next_row and how many rows were written."""
+    written = 0
+    for trailing in rows:
+        for i, value in enumerate(prefix, start=1):
+            ws.cell(row=next_row, column=i).value = value
+        for j, value in enumerate(trailing, start=len(prefix) + 1):
+            ws.cell(row=next_row, column=j).value = value
+        next_row += 1
+        written += 1
+    return next_row, written
+
+
+def _write_priced_entity(ws_by_model, next_row, prefix, model, prices, gbb_labels, condition_labels):
+    """Dispatches one department/category's prices to the right sheet based on `model`,
+    writing `prefix` + the model's trailing columns for each resulting row."""
+    if model == MODEL_LIST:
+        rows = [(price,) for price in _list_pricing_prices(prices)]
+    elif model == MODEL_GBB:
+        rows = list(_gbb_tiers(prices, gbb_labels))
+    else:  # MODEL_QUALITY_CONDITION
+        rows = list(_quality_condition_tiers(prices, gbb_labels, condition_labels))
+
+    ws = ws_by_model[model]
+    r, written = _write_rows(ws, next_row[model], prefix, rows)
+    next_row[model] = r
+    return written
+
+
 def build_combined_pricing_workbook(
-    template_bytes, items, department_models, gbb_labels, condition_labels
+    template_bytes, items, department_models, category_models, gbb_labels, condition_labels
 ):
-    """department_models: {category_code: "list" | "gbb" | "quality_condition"}.
-    Each department gets exactly one pricing model — its rows go into exactly one
-    of the three sheets below. Departments absent from department_models (or mapped
-    to anything else) are skipped entirely, on every sheet."""
+    """department_models / category_models: {code: "list" | "gbb" | "quality_condition"}.
+    department code is the rcsaero category_code; category code is "{category_code}-{subcategory_code}".
+    Each department/category gets exactly one pricing model — its rows go into exactly one
+    of the six sheets below (three department-level, three category-level). Anything absent
+    from its models dict (or mapped to something invalid) is skipped entirely, on every sheet."""
     dept_data = _collect_department_prices(items)
+    cat_data = _collect_category_prices(items)
 
     wb = openpyxl.load_workbook(io.BytesIO(template_bytes))
+    all_sheet_names = (
+        PRICE_LIST_SHEET_NAME, GBB_SHEET_NAME, QUALITY_CONDITION_SHEET_NAME,
+        CATEGORY_PRICE_LIST_SHEET_NAME, CATEGORY_GBB_SHEET_NAME, CATEGORY_QUALITY_CONDITION_SHEET_NAME,
+    )
     sheets = {}
-    for name in (PRICE_LIST_SHEET_NAME, GBB_SHEET_NAME, QUALITY_CONDITION_SHEET_NAME):
+    for name in all_sheet_names:
         if name not in wb.sheetnames:
             raise NoDataError(f'Pricing template is missing the "{name}" sheet.')
         sheets[name] = wb[name]
         _clear_data_rows(sheets[name])
 
-    next_row = {PRICE_LIST_SHEET_NAME: 2, GBB_SHEET_NAME: 2, QUALITY_CONDITION_SHEET_NAME: 2}
+    dept_ws_by_model = {
+        MODEL_LIST: sheets[PRICE_LIST_SHEET_NAME],
+        MODEL_GBB: sheets[GBB_SHEET_NAME],
+        MODEL_QUALITY_CONDITION: sheets[QUALITY_CONDITION_SHEET_NAME],
+    }
+    cat_ws_by_model = {
+        MODEL_LIST: sheets[CATEGORY_PRICE_LIST_SHEET_NAME],
+        MODEL_GBB: sheets[CATEGORY_GBB_SHEET_NAME],
+        MODEL_QUALITY_CONDITION: sheets[CATEGORY_QUALITY_CONDITION_SHEET_NAME],
+    }
+    dept_next_row = {MODEL_LIST: 2, MODEL_GBB: 2, MODEL_QUALITY_CONDITION: 2}
+    cat_next_row = {MODEL_LIST: 2, MODEL_GBB: 2, MODEL_QUALITY_CONDITION: 2}
     row_count = 0
 
     for code in sorted(dept_data):
         model = department_models.get(code)
         if model not in VALID_MODELS:
             continue
-        name = dept_data[code]["name"]
-        prices = dept_data[code]["prices"]
+        entry = dept_data[code]
+        prefix = [DEFAULT_STORE_GROUP, entry["name"]]
+        row_count += _write_priced_entity(
+            dept_ws_by_model, dept_next_row, prefix, model, entry["prices"], gbb_labels, condition_labels
+        )
 
-        if model == MODEL_LIST:
-            ws = sheets[PRICE_LIST_SHEET_NAME]
-            for price in _list_pricing_prices(prices):
-                r = next_row[PRICE_LIST_SHEET_NAME]
-                ws.cell(row=r, column=1).value = DEFAULT_STORE_GROUP
-                ws.cell(row=r, column=2).value = name
-                ws.cell(row=r, column=3).value = price
-                next_row[PRICE_LIST_SHEET_NAME] += 1
-                row_count += 1
-
-        elif model == MODEL_GBB:
-            ws = sheets[GBB_SHEET_NAME]
-            for label, price in _gbb_tiers(prices, gbb_labels):
-                r = next_row[GBB_SHEET_NAME]
-                ws.cell(row=r, column=1).value = DEFAULT_STORE_GROUP
-                ws.cell(row=r, column=2).value = name
-                ws.cell(row=r, column=3).value = label
-                ws.cell(row=r, column=4).value = price
-                next_row[GBB_SHEET_NAME] += 1
-                row_count += 1
-
-        else:  # MODEL_QUALITY_CONDITION
-            ws = sheets[QUALITY_CONDITION_SHEET_NAME]
-            for quality_label, condition_label, price in _quality_condition_tiers(
-                prices, gbb_labels, condition_labels
-            ):
-                r = next_row[QUALITY_CONDITION_SHEET_NAME]
-                ws.cell(row=r, column=1).value = DEFAULT_STORE_GROUP
-                ws.cell(row=r, column=2).value = name
-                ws.cell(row=r, column=3).value = quality_label
-                ws.cell(row=r, column=4).value = condition_label
-                ws.cell(row=r, column=5).value = price
-                next_row[QUALITY_CONDITION_SHEET_NAME] += 1
-                row_count += 1
+    for code in sorted(cat_data):
+        model = category_models.get(code)
+        if model not in VALID_MODELS:
+            continue
+        entry = cat_data[code]
+        prefix = [DEFAULT_STORE_GROUP, entry["department"], entry["name"], None]  # Sub-Category left blank
+        row_count += _write_priced_entity(
+            cat_ws_by_model, cat_next_row, prefix, model, entry["prices"], gbb_labels, condition_labels
+        )
 
     if row_count == 0:
         raise NoDataError(
-            "No departments were assigned a pricing model (or none had enough price data) — nothing to sync."
+            "No departments or categories were assigned a pricing model "
+            "(or none had enough price data) — nothing to sync."
         )
 
     out = io.BytesIO()
