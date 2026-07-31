@@ -57,13 +57,15 @@ def set_list_pricing_departments(company_id, department_codes):
     _save(companies)
 
 
-DEFAULT_GBB_LEVELS = 3
+DEFAULT_GBB_LABELS = ["Good", "Better", "Best"]
 
 
-def set_gbb_levels(company_id, levels):
+def set_gbb_labels(company_id, labels):
+    """labels: ordered list of tier names, lowest price first. Its length is
+    the number of GBB levels — there's no separate "levels" count to keep in sync."""
     companies = _load()
     for c in companies:
         if c["id"] == company_id:
-            c["gbb_levels"] = levels
+            c["gbb_labels"] = labels
             break
     _save(companies)

@@ -88,26 +88,28 @@ def set_pricing_departments(company_id):
     return "", 204
 
 
-@app.route("/companies/<company_id>/gbb-levels", methods=["GET"])
-def get_gbb_levels(company_id):
+@app.route("/companies/<company_id>/gbb-labels", methods=["GET"])
+def get_gbb_labels(company_id):
     company = companies.get_company(company_id)
     if not company:
         return jsonify({"error": "Unknown company."}), 404
-    return jsonify({"levels": company.get("gbb_levels", companies.DEFAULT_GBB_LEVELS)})
+    return jsonify({"labels": company.get("gbb_labels", companies.DEFAULT_GBB_LABELS)})
 
 
-@app.route("/companies/<company_id>/gbb-levels", methods=["POST"])
-def set_gbb_levels(company_id):
+@app.route("/companies/<company_id>/gbb-labels", methods=["POST"])
+def set_gbb_labels(company_id):
     company = companies.get_company(company_id)
     if not company:
         return jsonify({"error": "Unknown company."}), 404
 
     data = request.get_json(force=True)
-    levels = data.get("levels")
-    if not isinstance(levels, int) or levels < 1:
-        return jsonify({"error": "'levels' must be a positive integer."}), 400
+    labels = data.get("labels")
+    if not isinstance(labels, list) or len(labels) == 0 or not all(
+        isinstance(l, str) and l.strip() for l in labels
+    ):
+        return jsonify({"error": "'labels' must be a non-empty list of non-blank tier names."}), 400
 
-    companies.set_gbb_levels(company_id, levels)
+    companies.set_gbb_labels(company_id, [l.strip() for l in labels])
     return "", 204
 
 
@@ -139,7 +141,7 @@ def _sync(company_id, kind):
         template_bytes = PRICING_TEMPLATE_PATH.read_bytes()
         build_fn = build_gbb_workbook
         label = "GBB_Pricing"
-        extra_kwargs["levels"] = company.get("gbb_levels", companies.DEFAULT_GBB_LEVELS)
+        extra_kwargs["labels"] = company.get("gbb_labels", companies.DEFAULT_GBB_LABELS)
 
     try:
         out_bytes, row_count = build_fn(template_bytes, items, **extra_kwargs)

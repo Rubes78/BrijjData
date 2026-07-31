@@ -163,14 +163,6 @@ def build_pricing_workbook(template_bytes, items, included_department_codes=None
 GBB_SHEET_NAME = "GBB by Department"
 
 
-def _quality_labels(levels):
-    if levels == 3:
-        return ["Good", "Better", "Best"]
-    if levels == 2:
-        return ["Good", "Best"]
-    return [f"Tier {i + 1}" for i in range(levels)]
-
-
 def _bucket_medians(prices, levels):
     """Split a sorted list of prices into `levels` equal-count buckets and
     return the median of each non-empty bucket, ascending. Buckets that end up
@@ -191,7 +183,10 @@ def _bucket_medians(prices, levels):
     return medians
 
 
-def build_gbb_workbook(template_bytes, items, levels, included_department_codes=None):
+def build_gbb_workbook(template_bytes, items, labels, included_department_codes=None):
+    """labels: ordered tier names, lowest price first (e.g. ["Good", "Better", "Best"]).
+    The number of levels is simply len(labels) — there's no separate count to keep in sync."""
+    levels = len(labels)
     included = set(included_department_codes) if included_department_codes is not None else None
 
     dept_prices = OrderedDict()  # dept_name -> [prices]
@@ -210,8 +205,6 @@ def build_gbb_workbook(template_bytes, items, levels, included_department_codes=
 
     if not dept_prices:
         raise NoDataError("No items matched the selected departments with a price_1 set — nothing to sync.")
-
-    labels = _quality_labels(levels)
 
     wb = openpyxl.load_workbook(io.BytesIO(template_bytes))
     if GBB_SHEET_NAME not in wb.sheetnames:
