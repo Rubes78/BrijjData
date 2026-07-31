@@ -260,7 +260,6 @@
     loadGbbLabels();
     loadConditionLabels();
   }
-  renderCompanies();
 
   addToggle.addEventListener("click", () => {
     addCompanyForm.classList.toggle("visible");
@@ -469,6 +468,8 @@
   function escHtml(s) {
     return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
   }
+
+  renderCompanies();
 </script>
 </body>
 </html>
