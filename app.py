@@ -11,6 +11,7 @@ from sheet_builder import (
     build_department_workbook,
     build_category_workbook,
     build_pricing_workbook,
+    list_departments,
     NoDataError,
 )
 
@@ -52,6 +53,40 @@ def remove_company(company_id):
     return "", 204
 
 
+@app.route("/companies/<company_id>/departments", methods=["GET"])
+def get_departments(company_id):
+    company = companies.get_company(company_id)
+    if not company:
+        return jsonify({"error": "Unknown company."}), 404
+
+    try:
+        items = fetch_all_items(company["api_id"], company["api_key"], company["base_url"])
+    except RcsAeroError as e:
+        return jsonify({"error": str(e)}), 502
+
+    depts = list_departments(items)
+    selected = company.get("list_pricing_departments")  # None = all included
+    for d in depts:
+        d["included"] = True if selected is None else d["code"] in selected
+
+    return jsonify(depts)
+
+
+@app.route("/companies/<company_id>/pricing-departments", methods=["POST"])
+def set_pricing_departments(company_id):
+    company = companies.get_company(company_id)
+    if not company:
+        return jsonify({"error": "Unknown company."}), 404
+
+    data = request.get_json(force=True)
+    included = data.get("included")
+    if not isinstance(included, list):
+        return jsonify({"error": "'included' must be a list of department codes."}), 400
+
+    companies.set_list_pricing_departments(company_id, included)
+    return "", 204
+
+
 def _sync(company_id, kind):
     company = companies.get_company(company_id)
     if not company:
@@ -62,6 +97,7 @@ def _sync(company_id, kind):
     except RcsAeroError as e:
         return jsonify({"error": str(e)}), 502
 
+    extra_kwargs = {}
     if kind == "department":
         template_bytes = DEPT_TEMPLATE_PATH.read_bytes()
         build_fn = build_department_workbook
@@ -74,9 +110,10 @@ def _sync(company_id, kind):
         template_bytes = PRICING_TEMPLATE_PATH.read_bytes()
         build_fn = build_pricing_workbook
         label = "Pricing"
+        extra_kwargs["included_department_codes"] = company.get("list_pricing_departments")
 
     try:
-        out_bytes, row_count = build_fn(template_bytes, items)
+        out_bytes, row_count = build_fn(template_bytes, items, **extra_kwargs)
     except NoDataError as e:
         return jsonify({"error": str(e)}), 422
 

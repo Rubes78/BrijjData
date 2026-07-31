@@ -99,15 +99,35 @@ def build_category_workbook(template_bytes, items):
     return out.getvalue(), len(cats)
 
 
+def list_departments(items):
+    """Distinct (code, description) departments present in a set of rcsaero items,
+    sorted by code. Used to drive the pricing-department selection UI."""
+    depts = OrderedDict()
+    for it in items:
+        code = (it.get("category_code") or "").strip()
+        if not code:
+            continue
+        desc = (it.get("category_code_description") or "").strip()
+        if code not in depts or (desc and not depts[code]):
+            depts[code] = desc
+    return [{"code": code, "description": depts[code] or code.title()} for code in sorted(depts)]
+
+
 PRICE_LIST_SHEET_NAME = "Price Lists by Department"
 DEFAULT_STORE_GROUP = "Standard"
 
 
-def build_pricing_workbook(template_bytes, items):
+def build_pricing_workbook(template_bytes, items, included_department_codes=None):
+    """included_department_codes: None means include every department; otherwise
+    only items whose category_code is in this set/list are synced."""
+    included = set(included_department_codes) if included_department_codes is not None else None
+
     prices = set()  # (dept_name, price)
     for it in items:
         code = (it.get("category_code") or "").strip()
         if not code:
+            continue
+        if included is not None and code not in included:
             continue
         desc = (it.get("category_code_description") or "").strip()
         dept_name = desc if desc else code.title()
@@ -117,7 +137,9 @@ def build_pricing_workbook(template_bytes, items):
         prices.add((dept_name, round(float(price), 2)))
 
     if not prices:
-        raise NoDataError("No items had both a category_code and price_1 set — nothing to sync.")
+        raise NoDataError(
+            "No items matched the selected departments with a price_1 set — nothing to sync."
+        )
 
     wb = openpyxl.load_workbook(io.BytesIO(template_bytes))
     if PRICE_LIST_SHEET_NAME not in wb.sheetnames:

@@ -109,6 +109,35 @@
       font-size: 0.78rem;
     }
 
+    .pricing-config-toggle {
+      font-size: 0.82rem;
+      color: #818cf8;
+      cursor: pointer;
+      margin-top: 0.9rem;
+      display: inline-block;
+    }
+
+    #pricingDeptPanel { display: none; margin-top: 0.75rem; }
+    #pricingDeptPanel.visible { display: block; }
+
+    .dept-list {
+      max-height: 220px;
+      overflow-y: auto;
+      border: 1px solid #2d3148;
+      border-radius: 8px;
+      padding: 0.6rem 0.8rem;
+    }
+    .dept-item {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      font-size: 0.85rem;
+      padding: 0.3rem 0;
+    }
+    .dept-item input { width: auto; }
+    .dept-item label { margin: 0; color: #e2e8f0; font-size: 0.85rem; }
+    .dept-loading { font-size: 0.82rem; color: #64748b; padding: 0.4rem 0; }
+
     .spinner {
       display: inline-block;
       width: 14px;
@@ -156,7 +185,13 @@
   <div class="sync-buttons">
     <button class="btn green" id="deptBtn" disabled>Download Department Data</button>
     <button class="btn green" id="catBtn" disabled>Download Category Data</button>
-    <button class="btn green" id="priceBtn" disabled>Download Pricing Data</button>
+    <button class="btn green" id="priceBtn" disabled>Download Pricing Data (List Pricing)</button>
+  </div>
+
+  <span class="pricing-config-toggle" id="pricingConfigToggle">Configure departments for List Pricing</span>
+
+  <div id="pricingDeptPanel">
+    <div class="dept-list" id="deptList"></div>
   </div>
 
   <div class="status" id="status"></div>
@@ -170,6 +205,9 @@
   const deptBtn         = document.getElementById("deptBtn");
   const catBtn          = document.getElementById("catBtn");
   const priceBtn        = document.getElementById("priceBtn");
+  const pricingConfigToggle = document.getElementById("pricingConfigToggle");
+  const pricingDeptPanel    = document.getElementById("pricingDeptPanel");
+  const deptList         = document.getElementById("deptList");
   const statusBox       = document.getElementById("status");
 
   let allCompanies = JSON.parse('{{ companies | tojson | safe }}');
@@ -283,9 +321,81 @@
   catBtn.addEventListener("click", () => runSync("category", catBtn));
   priceBtn.addEventListener("click", () => runSync("pricing", priceBtn));
 
+  pricingConfigToggle.addEventListener("click", async () => {
+    const wasVisible = pricingDeptPanel.classList.contains("visible");
+    pricingDeptPanel.classList.toggle("visible");
+    if (!wasVisible) {
+      await loadDepartments();
+    }
+  });
+
+  companySelect.addEventListener("change", () => {
+    if (pricingDeptPanel.classList.contains("visible")) {
+      loadDepartments();
+    }
+  });
+
+  async function loadDepartments() {
+    const companyId = companySelect.value;
+    if (!companyId) return;
+
+    deptList.innerHTML = '<div class="dept-loading"><span class="spinner"></span>Loading departments...</div>';
+
+    try {
+      const res = await fetch(`/companies/${companyId}/departments`);
+      const depts = await res.json();
+      if (!res.ok) {
+        deptList.innerHTML = `<div class="dept-loading">${escHtml(depts.error || "Could not load departments.")}</div>`;
+        return;
+      }
+      if (depts.length === 0) {
+        deptList.innerHTML = '<div class="dept-loading">No departments found.</div>';
+        return;
+      }
+      deptList.innerHTML = "";
+      for (const d of depts) {
+        const item = document.createElement("div");
+        item.className = "dept-item";
+        const cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.checked = d.included;
+        cb.id = `dept_${d.code}`;
+        cb.addEventListener("change", saveDepartmentSelection);
+        const lbl = document.createElement("label");
+        lbl.htmlFor = cb.id;
+        lbl.textContent = `${d.description} (${d.code})`;
+        item.appendChild(cb);
+        item.appendChild(lbl);
+        deptList.appendChild(item);
+      }
+    } catch (e) {
+      deptList.innerHTML = '<div class="dept-loading">Network error loading departments.</div>';
+    }
+  }
+
+  async function saveDepartmentSelection() {
+    const companyId = companySelect.value;
+    if (!companyId) return;
+    const included = Array.from(deptList.querySelectorAll('input[type="checkbox"]:checked'))
+      .map(cb => cb.id.replace(/^dept_/, ""));
+    try {
+      await fetch(`/companies/${companyId}/pricing-departments`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ included }),
+      });
+    } catch (e) {
+      showStatus("error", "Could not save department selection.");
+    }
+  }
+
   function showStatus(kind, msg) {
     statusBox.className = `status visible ${kind}`;
     statusBox.textContent = msg;
+  }
+
+  function escHtml(s) {
+    return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
   }
 </script>
 </body>

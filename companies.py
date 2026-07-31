@@ -44,3 +44,14 @@ def add_company(name, api_id, api_key, base_url):
 def delete_company(company_id):
     companies = [c for c in _load() if c["id"] != company_id]
     _save(companies)
+
+
+def set_list_pricing_departments(company_id, department_codes):
+    """Persist which department codes are included in the List Pricing sync.
+    None means "all departments" (the default until the user narrows it down)."""
+    companies = _load()
+    for c in companies:
+        if c["id"] == company_id:
+            c["list_pricing_departments"] = department_codes
+            break
+    _save(companies)
